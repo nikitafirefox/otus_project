@@ -1,0 +1,103 @@
+version: '3'
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:latest
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: 10
+    AIRFLOW_CONN_OZON_CONN: postgresql://${OZON_DB_USER}:${OZON_DB_PASSWORD}@${OZON_DB_HOST}:${OZON_DB_PORT}/${OZON_DB}
+    AIRFLOW_CONN_WB_CONN: mysql://${WB_DB_USER}:${WB_DB_PASSWORD}@${WB_DB_HOST}:${WB_DB_PORT}/${WB_DB}
+    AIRFLOW_CONN_CLICK_CONN: clickhouse://${CLICK_DB_USER}:${CLICK_DB_PASSWORD}@dwh:9000
+    AIRFLOW_VAR_OZON_DB_NAME: ${OZON_DB}
+    AIRFLOW_VAR_OZON_DB_SCHEMA: ${OZON_SCHEMA}
+    AIRFLOW_VAR_WB_DB_NAME: ${WB_DB}
+    AIRFLOW_VAR_CLICK_STG_NAME: ${CLICK_DB_STG}
+    AIRFLOW_VAR_CLICK_DWH_NAME: ${CLICK_DB_PROD}
+    AIRFLOW_VAR_API_1C_ENDPOINT: ${API_1C_ENDPOINT}
+    _PIP_ADDITIONAL_REQUIREMENTS: 'airflow-clickhouse-plugin==1.2.0 apache-airflow-providers-common-sql'
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - 8080:8080
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+
+  dwh:
+    image: clickhouse/clickhouse-server:22.3
+    environment:
+      CLICK_DB_STG: ${CLICK_DB_STG}
+      CLICK_DB_PROD: ${CLICK_DB_PROD}
+      CLICK_DB_USER: ${CLICK_DB_USER}
+      CLICK_DB_PASSWORD: ${CLICK_DB_PASSWORD}
+    ports:
+      - 9000:9000
+      - 8123:8123
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse:cached
+      - ./clickhouse/init-defaults.sh:/docker-entrypoint-initdb.d/init-defaults.sh:ro
+
+  metabase:
+    image: metabase/metabase:latest
+    volumes:
+      - ./metabase/plugins:/plugins
+      - ./metabase/metabase.db:/metabase.db/
+    environment:
+      - MB_DB_TYPE=h2
+      - MB_DB_FILE=/metabase.db
+    ports: 
+      - 3030:3000
+      
+
+volumes:
+  postgres-db-volume:
+  clickhouse-data:

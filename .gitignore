@@ -1,0 +1,8 @@
+/airflow/logs/*
+/airflow/dags/__pycache__
+/airflow/plugins/*
+
+/metabase/plugins/*
+!clickhouse.metabase-driver.jar
+
+.env
